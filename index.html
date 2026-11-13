@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>연세대 마을버스 노선 실험</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#edf2f5;color:#112a3b;font:15px system-ui,sans-serif}
+main{max-width:1200px;margin:auto;padding:28px 20px}h1{font-size:clamp(24px,4vw,34px);margin:0 0 10px}
+p{margin:0 0 16px;color:#476171}.panel{background:#fff;border:1px solid #cddae1;border-radius:14px;overflow:hidden}
+.controls,.stats{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:14px 16px}
+button,select,input{font:inherit}button,select{padding:8px 12px;border:1px solid #9cafbd;border-radius:7px;background:white;color:inherit}
+button{cursor:pointer;background:#134f68;color:white}.stats{border-top:1px solid #cddae1}.stats span{min-width:112px}
+.stats strong{display:block;font-size:20px}#map{height:clamp(360px,61vh,720px);background:#dce7e9}
+.bus{font-size:25px;text-align:center;filter:drop-shadow(0 2px 3px #0006)}.caption{padding:12px 16px;font-size:13px;margin:0}
+</style>
+<main>
+<h1>연세대 마을버스 노선 실험</h1>
+<p id="status" role="status">학습 기록 불러오는 중</p>
+<section class="panel">
+<div class="controls">
+<button id="toggle" type="button">일시정지</button>
+<label>경로 <select id="mode"><option value="recent">최근 학습 에피소드</option><option value="policy">현재 학습 정책</option><option value="best">학습 중 최고 점수</option></select></label>
+<label>재생 속도 <input id="speed" type="range" min="1" max="5" value="3"></label>
+</div>
+<div id="map" aria-label="정류장 위치와 버스 이동 경로"></div>
+<div class="stats">
+<span>에피소드<strong id="episode">—</strong></span>
+<span>누적 보상<strong id="score">—</strong></span>
+<span>누적 이동거리<strong id="distance">—</strong></span>
+<span>현재 정류장<strong id="stop">—</strong></span>
+</div>
+<p class="caption">주황색은 우선 거점 · 점은 실제 후보 정류장 · 연결선은 방문 순서 · 이동비용은 도로거리 행렬 기준</p>
+</section>
+</main>
+<script>
+const byId = id => document.getElementById(id);
+const status = byId("status");
+const mode = byId("mode");
+const playback = {running:!matchMedia("(prefers-reduced-motion: reduce)").matches, snapshot:null, run:null, index:0, t:0, hold:0, queue:[], seen:0};
+const runName = new URLSearchParams(location.search).get("run") || "local";
+if (!/^[A-Za-z0-9_-]+$/.test(runName)) throw new Error("잘못된 실행 이름");
+const map = L.map("map").setView([37.559,126.943], 14);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom:19, attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+}).addTo(map);
+const routeLine = L.polyline([], {color:"#027c80",weight:5}).addTo(map);
+const bus = L.marker([37.559,126.943], {icon:L.divIcon({className:"bus",html:"🚌",iconSize:[34,34],iconAnchor:[17,17]}),interactive:false,zIndexOffset:500}).addTo(map);
+let network;
+const markers = L.layerGroup().addTo(map);
+
+function point(i) { const stop = network.stops[i]; return [stop.lat,stop.lon]; }
+function readout() {
+  const p = playback;
+  const traveled = p.run.path.slice(0,p.index+1);
+  const meters = traveled.slice(1).reduce((total,stop,i) => total + network.distances_m[traveled[i]][stop],0);
+  byId("episode").textContent = p.run.episode ?? p.snapshot.progress;
+  byId("score").textContent = p.run.rewards.slice(0,p.index).reduce((a,b)=>a+b,0).toFixed(2);
+  byId("distance").textContent = `${(meters/1000).toFixed(2)} km`;
+  byId("stop").textContent = network.stops[traveled.at(-1)].name;
+}
+let cursor = 0;
+function nextRun() {
+  const p = playback;
+  const snapshot = p.snapshot;
+  if (!snapshot) return;
+  if (mode.value === "recent") {
+    p.run = p.queue.shift() || snapshot.recent[cursor++ % snapshot.recent.length];
+  } else {
+    p.run = snapshot[mode.value];
+  }
+  p.index = 0; p.t = 0; p.hold = 0;
+  bus.setLatLng(point(p.run.path[0]));
+  routeLine.setLatLngs([point(p.run.path[0])]);
+  readout();
+}
+function updateToggle() {
+  byId("toggle").textContent = playback.running ? "일시정지" : "재생";
+}
+updateToggle();
+byId("toggle").onclick = () => { playback.running = !playback.running; updateToggle(); };
+mode.onchange = nextRun;
+let last = performance.now();
+function frame(now) {
+  const delta = Math.min(now-last,50);
+  last = now;
+  const p = playback;
+  if (p.running && p.run) {
+    const path = p.run.path;
+    if (p.index === path.length-1) {
+      p.hold += delta;
+      if (p.hold >= 850) nextRun();
+    } else {
+      p.t = Math.min(1,p.t + delta*Number(byId("speed").value)/1600);
+      const a = point(path[p.index]), b = point(path[p.index+1]);
+      const location = a.map((v,i)=>v+(b[i]-v)*p.t);
+      bus.setLatLng(location);
+      routeLine.setLatLngs([...path.slice(0,p.index+1).map(point),location]);
+      if (p.t === 1) { p.index++; p.t=0; readout(); }
+    }
+  }
+  requestAnimationFrame(frame);
+}
+async function load(url) {
+  const response = await fetch(url,{cache:"no-store"});
+  if (!response.ok) throw new Error(`${response.status} ${url}`);
+  return response.json();
+}
+async function poll() {
+  try {
+    const snapshot = await load(`runs/${runName}/trace.json`);
+    if (snapshot.stops.map(s=>s.id).join() !== network.stops.map(s=>s.id).join()) {
+      renderStops(snapshot);
+      playback.run = null;
+      playback.queue = [];
+      playback.seen = 0;
+    }
+    const p = playback;
+    if (snapshot.progress < p.seen) { p.seen=0; p.queue=[]; p.run=null; }
+    p.queue = [...p.queue,...snapshot.recent.filter(run=>run.episode>p.seen)].slice(-30);
+    p.seen=snapshot.progress;
+    p.snapshot=snapshot;
+    if (!p.run) nextRun();
+    status.textContent = `${snapshot.config.algo} · ${snapshot.progress} 에피소드 · ${snapshot.steps.toLocaleString()} 전이${snapshot.config.steps ? " / " + snapshot.config.steps.toLocaleString() : ""} · 거리 제한 ${(snapshot.budget_m/1000).toFixed(2)} km`;
+  } catch (error) {
+    status.textContent = `학습 기록 대기 중 · ${error.message}`;
+  } finally {
+    setTimeout(poll,1200);
+  }
+}
+function renderStops(data) {
+  network=data;
+  markers.clearLayers();
+  map.fitBounds(network.stops.map((_,i)=>point(i)),{padding:[32,32]});
+  network.stops.forEach((stop,i)=>{
+    const label=document.createElement("span");
+    label.textContent=stop.name+(stop.hub ? ` · ${stop.hub}` : "");
+    L.circleMarker(point(i),{radius:stop.hub?7:4,weight:2,color:"#fff",fillColor:stop.hub?"#c46413":"#335a75",fillOpacity:1}).bindTooltip(label).addTo(markers);
+  });
+}
+load("network.json").then(data=>{
+  renderStops(data);
+  poll();
+  requestAnimationFrame(frame);
+}).catch(error=>{status.textContent=error.message;});
+</script>
+</HTML>
+cat > yonsei_bus_rl/.gitignore <<'EOF'
+__pycache__/
+.venv/
+runs/
+.DS_Store
+EOF
+cat > yonsei_bus_rl/requirements.txt <<'EOF'
+torch>=2.2
+EOF
+cd yonsei_bus_rl
+python3 train.py --algo sarsa --episodes 100 --out runs/sarsa
+python3 train.py --algo random --episodes 100 --out runs/random
+python3 train.py --algo greedy --episodes 1 --out runs/greedy
+python3 -m py_compile prepare.py train.py
