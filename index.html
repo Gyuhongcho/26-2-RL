@@ -13,7 +13,8 @@ p{margin:0 0 16px;color:#476171}.panel{background:#fff;border:1px solid #cddae1;
 button,select,input{font:inherit}button,select{padding:8px 12px;border:1px solid #9cafbd;border-radius:7px;background:white;color:inherit}
 button{cursor:pointer;background:#134f68;color:white}.stats{border-top:1px solid #cddae1}.stats span{min-width:112px}
 .stats strong{display:block;font-size:20px}#map{height:clamp(360px,61vh,720px);background:#dce7e9}
-.bus{font-size:25px;text-align:center;filter:drop-shadow(0 2px 3px #0006)}.caption{padding:12px 16px;font-size:13px;margin:0}
+.bus{font-size:25px;text-align:center;filter:drop-shadow(0 2px 3px #0006)}.final-route{padding:12px 16px;background:#fff5dc;border-top:1px solid #d9bd83}
+.caption{padding:12px 16px;font-size:13px;margin:0}
 </style>
 <main>
 <h1>연세대 마을버스 노선 실험</h1>
@@ -22,11 +23,16 @@ button{cursor:pointer;background:#134f68;color:white}.stats{border-top:1px solid
 <div class="controls">
 <button id="toggle" type="button">일시정지</button>
 <label>경로 <select id="mode"><option value="recent">최근 학습 경로</option><option value="best">에피소드 최고 보상 노선</option></select></label>
-<button id="show-best" disabled>최고 보상 노선 보기</button>
+<button id="show-best" disabled>에피소드 최고 노선 보기</button>
+<button id="show-final" type="button" aria-pressed="false" disabled>🏆 전체 최고 노선</button>
 <label>재생 속도 <input id="speed" type="range" min="1" max="5" value="3"></label>
 </div>
 <div id="map" aria-label="정류장 위치와 버스 이동 경로"></div>
 <p id="winner" class="caption" aria-live="polite">첫 에피소드가 끝나면 최고 보상 노선이 표시됩니다.</p>
+<div id="final-route" class="final-route" hidden>
+<strong id="final-summary"></strong>
+<ol id="final-stops"></ol>
+</div>
 <div class="stats">
 <span>라운드<strong id="episode">—</strong></span>
 <span>누적 보상<strong id="score">—</strong></span>
@@ -48,6 +54,9 @@ const map = L.map("map").setView([37.559,126.943], 14);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom:19, attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
 }).addTo(map);
+const finalLine = L.polyline([], {color:"#a54e00",weight:7});
+const finalMarkers = L.layerGroup();
+let finalVisible = false;
 const routeLine = L.polyline([], {color:"#027c80",weight:5}).addTo(map);
 const bus = L.marker([37.559,126.943], {icon:L.divIcon({className:"bus",html:"🚌",iconSize:[34,34],iconAnchor:[17,17]}),interactive:false,zIndexOffset:500}).addTo(map);
 let network;
@@ -92,12 +101,46 @@ byId("show-best").onclick = () => {
   nextRun();
 };
 mode.onchange = () => { cursor = 0; nextRun(); };
+
+byId("show-final").onclick = () => {
+  const winner = playback.snapshot.overall_best;
+  if (!winner) return;
+  finalVisible = !finalVisible;
+  byId("show-final").setAttribute("aria-pressed", String(finalVisible));
+  byId("final-route").hidden = !finalVisible;
+  for (const id of ["toggle", "mode", "show-best", "speed"]) byId(id).disabled = finalVisible;
+  if (!finalVisible) {
+    finalLine.remove();
+    finalMarkers.remove();
+    routeLine.addTo(map);
+    bus.addTo(map);
+    map.fitBounds(network.stops.map((_,i)=>point(i)), {padding:[32,32]});
+    return;
+  }
+  routeLine.remove();
+  bus.remove();
+  const points = winner.path.map(point);
+  finalLine.setLatLngs(points).addTo(map);
+  finalMarkers.clearLayers().addTo(map);
+  const items = winner.path.map((index, order) => {
+    const label = document.createElement("span");
+    label.textContent = `${order + 1}. ${network.stops[index].name}`;
+    L.circleMarker(point(index), {radius:7, color:"#a54e00", fillColor:"#fff5dc", fillOpacity:1})
+      .bindTooltip(label).addTo(finalMarkers);
+    const item = document.createElement("li");
+    item.textContent = network.stops[index].name;
+    return item;
+  });
+  byId("final-stops").replaceChildren(...items);
+  byId("final-summary").textContent = `전체 최고 보상 ${winner.score.toFixed(2)} · ${(winner.distance_m/1000).toFixed(2)} km · 에피소드 ${winner.episode}, 라운드 ${winner.round}`;
+  map.fitBounds(points, {padding:[42,42], maxZoom:17});
+};
 let last = performance.now();
 function frame(now) {
   const delta = Math.min(now-last,50);
   last = now;
   const p = playback;
-  if (p.running && p.run) {
+  if (!finalVisible && p.running && p.run) {
     const path = p.run.path;
     if (p.index === path.length-1) {
       p.hold += delta;
@@ -145,11 +188,12 @@ async function poll() {
     const episode = Math.ceil(snapshot.progress / size);
     const budget = snapshot.config.steps ? ` · 전이 ${snapshot.steps} / ${snapshot.config.steps}` : ` · 전체 ${snapshot.progress} / ${total}`;
     status.textContent = `${snapshot.config.algo} · ${snapshot.finished ? "학습 종료 · 경로 재생 중" : "학습 중"} · 에피소드 ${episode}, 라운드 ${round} / ${size}${budget}`;
+    byId("show-final").disabled = !(snapshot.finished && snapshot.overall_best);
     const winner = (snapshot.winners || snapshot.best || []).at(-1);
     if (winner) {
       const names = winner.path.map(i => network.stops[i].name);
       byId("winner").textContent = `에피소드 ${winner.episode} 최고 보상 ${winner.score.toFixed(2)} · ${(winner.distance_m / 1000).toFixed(2)} km · ${names.join(" → ")}`;
-      byId("show-best").disabled = false;
+      byId("show-best").disabled = finalVisible;
     }
 
   } catch (error) {

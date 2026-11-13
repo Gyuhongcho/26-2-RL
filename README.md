@@ -45,3 +45,6 @@ Q-learning과 SARSA는 동일한 상태 표현으로 각각 다음 상태의 최
 
 `history.jsonl`에는 모든 경로를, `episode_winners.json`에는 에피소드별 최고 보상 경로를 저장한다. 지도에서 **최고 보상 노선 보기**를 누르면 최신 에피소드 우승 경로를 재생한다. 모델은 `model.pt` 또는 `q_table.json`에 저장된다.
 `--steps`를 지정하면 전이 예산에 맞춰 학습하고 마지막으로 진행 중이던 노선을 완성한다. 마지막 에피소드는 설정한 라운드 수보다 짧을 수 있다.
+
+병렬 실험 명령은 [PARALLEL_EXPERIMENTS.txt](PARALLEL_EXPERIMENTS.txt)에 정리했다.
+학습 종료 후 **🏆 전체 최고 노선**을 누르면 실행 전체에서 보상이 가장 높았던 경로를 지도에 고정한다. 화면 없이 돌린 실험도 `python3 train.py --replay runs/dqn-42`로 열 수 있다.

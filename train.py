@@ -249,7 +249,17 @@ def main():
     parser.add_argument("--alpha", type=float, default=0.1)
     parser.add_argument("--gamma", type=float, default=1)
     parser.add_argument("--no-viewer", action="store_true", help="Train without opening the local map")
+    parser.add_argument("--replay", type=Path, help="Open a finished run from its output folder")
     args = parser.parse_args()
+    if args.replay:
+        if args.no_viewer:
+            parser.error("--replay opens the viewer")
+        trace_path = args.replay / "trace.json"
+        if not trace_path.is_file():
+            parser.error(f"Trace file missing: {trace_path}")
+        with viewer(True, args.replay.resolve()):
+            pass
+        return
     if (min(args.episodes, args.rounds_per_episode) < 1 or not math.isfinite(args.budget_m) or args.budget_m <= 0
             or not all(math.isfinite(x) and x >= 0 for x in (args.bonus, args.cost))
             or not 0 < args.alpha <= 1 or not 0 <= args.gamma <= 1):
@@ -337,7 +347,9 @@ def main():
                     episode_best = None
                 if not args.no_viewer and (i == 1 or i % stride == 0 or episode_end) or finished:
                     publish(args.out / "trace.json", dict(trace, recent=list(recent), best=winners[-1:],
-                                                         winners=winners[-40:], progress=i,
+                                                         winners=winners[-40:],
+                                                         overall_best=max(winners, key=lambda r: r["score"]) if finished else None,
+                                                         progress=i,
                                                          steps=steps, finished=finished))
                     if not args.no_viewer and not finished:
                         time.sleep(0.08)
