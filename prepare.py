@@ -57,25 +57,17 @@ def prepare(folder, output, include_mapo=False):
         for row in ridership:
             by_station.setdefault(row["station_id"], []).append(row)
 
-        def training_demand(stop):
-            records = by_station.get(stop["station_id"], [])
-            return sum(int(r["alight_07_09"]) / int(r["calendar_days"])
-                       for r in records if r["split"] == "train")
-
-        for keyword in ("홍대입구", "연남동", "공덕역"):
-            options = [r for r in stations if r["station_id"] not in ids
-                       and r["station_id"].startswith(("113000", "113900"))
-                       and keyword in r["station_name"]
-                       and r["village_bus_stoppable"] == "1"
-                       and {row["month"] for row in by_station.get(r["station_id"], [])} == set(monthly)]
-            if len(options) < 2:
-                raise ValueError(f"Need at least two stops with complete ridership for {keyword}")
-            for stop in sorted(options, key=lambda r: (-training_demand(r), r["station_id"]))[:2]:
-                station_id = stop["station_id"]
-                ids.append(station_id)
-                candidates.append(stop)
-                for row in by_station[station_id]:
-                    monthly[row["month"]][station_id] = int(row["alight_07_09"])
+        for stop in stations:
+            station_id = stop["station_id"]
+            if station_id in original or not station_id.startswith(("113000", "113900")):
+                continue
+            records = by_station.get(station_id, [])
+            if len(records) != len(monthly) or {r["month"] for r in records} != set(monthly):
+                raise ValueError(f"Incomplete monthly coverage for Mapo stop {station_id}")
+            ids.append(station_id)
+            candidates.append(stop)
+            for row in records:
+                monthly[row["month"]][station_id] = int(row["alight_07_09"])
 
         selected = set(ids)
         edges = {(i, j): distances[x][y] for x, i in enumerate(baseline_ids)
