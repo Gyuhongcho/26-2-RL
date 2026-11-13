@@ -4,12 +4,14 @@ import csv
 import json
 import math
 from pathlib import Path
+from io import TextIOWrapper
+from zipfile import ZipFile
 
 HUBS = {
-    "112900230": "신촌", "113900230": "신촌", "113000137": "신촌", "113000456": "신촌",
-    "113900229": "이대", "113000118": "이대",
-    "113900302": "아현",
-    "112000031": "연대앞", "112900188": "연대앞",
+    "112900230": "신촌",
+    "112000057": "이대", "112900187": "이대",
+    "112000410": "아현", "112900121": "아현",
+    "112000031": "연대앞", "112000032": "연대앞", "112900188": "연대앞",
 }
 
 
@@ -19,26 +21,37 @@ def rows(path):
 
 
 def prepare(folder, output):
-    candidates = rows(folder / "13_candidate_pool_v2_PROPOSAL.csv")
-    ids = [r["station_id"] for r in candidates]
-    if len(ids) != len(set(ids)) or not set(HUBS) <= set(ids):
-        raise ValueError("Candidate IDs must be unique and include the configured hub stops")
-    matrix = rows(folder / "14_candidate_v2_road_distance_matrix_m.csv")
-    by_origin = {next(iter(row.values())): row for row in matrix}
-    if len(matrix) != len(by_origin) or set(by_origin) != set(ids):
-        raise ValueError("Distance matrix origin IDs do not match candidates")
-    distances = [[float(by_origin[i][j]) for j in ids] for i in ids]
-    for i, row in enumerate(distances):
-        for j, distance in enumerate(row):
-            if not math.isfinite(distance) or distance < 0 or (i == j and distance != 0):
-                raise ValueError(f"Invalid directional distance {ids[i]} → {ids[j]}")
+    candidates = [row for row in rows(folder / "01_region_stations_clean.csv")
+                  if row["station_id"].startswith("112")]
+    ids = [row["station_id"] for row in candidates]
+    selected = set(ids)
+    if len(ids) != len(selected) or not set(HUBS) <= selected:
+        raise ValueError("Expected unique Seodaemun stop IDs including all configured hub stops")
+
+    edges = {}
+    for archive in sorted(folder.glob("11_road_distance_part*.zip")):
+        with ZipFile(archive) as zipped:
+            for name in zipped.namelist():
+                with zipped.open(name) as source:
+                    for row in csv.DictReader(TextIOWrapper(source, encoding="utf-8-sig")):
+                        origin, destination = row["from_station_id"], row["to_station_id"]
+                        if origin not in selected or destination not in selected:
+                            continue
+                        distance = float(row["road_m"])
+                        if not math.isfinite(distance) or distance < 0 or (origin, destination) in edges:
+                            raise ValueError(f"Invalid or duplicate directional distance {origin} → {destination}")
+                        edges[origin, destination] = distance
+    distances = [[0 if origin == destination else edges[origin, destination]
+                  for destination in ids] for origin in ids]
     monthly = {}
     days = {}
     splits = {}
     for row in rows(folder / "02_region_ridership_7to9_monthly.csv"):
         month, station = row["month"], row["station_id"]
-        if station not in by_origin:
+        if station not in selected:
             continue
+        if row["has_source_record"] != "1":
+            raise ValueError(f"Missing source ridership: {month}/{station}")
         if station in monthly.setdefault(month, {}):
             raise ValueError(f"Duplicate ridership row: {month}/{station}")
         monthly[month][station] = int(row["alight_07_09"])
@@ -57,7 +70,7 @@ def prepare(folder, output):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("source", type=Path, help="Folder containing CSV files 02, 13 and 14")
+    parser.add_argument("source", type=Path, help="Folder containing CSV files 01, 02 and road distance ZIP files 11")
     parser.add_argument("--out", type=Path, default=Path(__file__).with_name("network.json"))
     args = parser.parse_args()
     prepare(args.source, args.out)
