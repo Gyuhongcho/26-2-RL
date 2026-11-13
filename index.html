@@ -21,14 +21,17 @@ button{cursor:pointer;background:#134f68;color:white}.stats{border-top:1px solid
 <section class="panel">
 <div class="controls">
 <button id="toggle" type="button">일시정지</button>
-<label>경로 <select id="mode"><option value="recent">최근 학습 에피소드</option><option value="policy">현재 학습 정책</option><option value="best">학습 중 최고 점수</option></select></label>
+<label>경로 <select id="mode"><option value="recent">최근 학습 경로</option><option value="best">에피소드 최고 보상 노선</option></select></label>
+<button id="show-best" disabled>최고 보상 노선 보기</button>
 <label>재생 속도 <input id="speed" type="range" min="1" max="5" value="3"></label>
 </div>
 <div id="map" aria-label="정류장 위치와 버스 이동 경로"></div>
+<p id="winner" class="caption" aria-live="polite">첫 에피소드가 끝나면 최고 보상 노선이 표시됩니다.</p>
 <div class="stats">
-<span>에피소드<strong id="episode">—</strong></span>
+<span>라운드<strong id="episode">—</strong></span>
 <span>누적 보상<strong id="score">—</strong></span>
 <span>누적 이동거리<strong id="distance">—</strong></span>
+<span>출발점<strong id="origin">—</strong></span>
 <span>현재 정류장<strong id="stop">—</strong></span>
 </div>
 <p class="caption">주황색은 우선 거점 · 점은 실제 후보 정류장 · 연결선은 방문 순서 · 이동비용은 도로거리 행렬 기준</p>
@@ -39,8 +42,8 @@ const byId = id => document.getElementById(id);
 const status = byId("status");
 const mode = byId("mode");
 const playback = {running:!matchMedia("(prefers-reduced-motion: reduce)").matches, snapshot:null, run:null, index:0, t:0, hold:0, queue:[], seen:0};
-const runName = new URLSearchParams(location.search).get("run") || "local";
-if (!/^[A-Za-z0-9_-]+$/.test(runName)) throw new Error("잘못된 실행 이름");
+const runName = new URLSearchParams(location.search).get("run");
+if (runName && !/^[A-Za-z0-9_-]+$/.test(runName)) throw new Error("잘못된 실행 이름");
 const map = L.map("map").setView([37.559,126.943], 14);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom:19, attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -55,9 +58,10 @@ function readout() {
   const p = playback;
   const traveled = p.run.path.slice(0,p.index+1);
   const meters = traveled.slice(1).reduce((total,stop,i) => total + network.distances_m[traveled[i]][stop],0);
-  byId("episode").textContent = p.run.episode ?? p.snapshot.progress;
+  byId("episode").textContent = p.run.round ?? p.run.episode ?? p.snapshot.progress;
   byId("score").textContent = p.run.rewards.slice(0,p.index).reduce((a,b)=>a+b,0).toFixed(2);
   byId("distance").textContent = `${(meters/1000).toFixed(2)} km`;
+  byId("origin").textContent = network.stops[p.run.path[0]].name;
   byId("stop").textContent = network.stops[traveled.at(-1)].name;
 }
 let cursor = 0;
@@ -68,7 +72,9 @@ function nextRun() {
   if (mode.value === "recent") {
     p.run = p.queue.shift() || snapshot.recent[cursor++ % snapshot.recent.length];
   } else {
-    p.run = snapshot[mode.value];
+    const routes = (snapshot.winners || snapshot.best || []).flat();
+    if (!routes.length) return;
+    p.run = routes[cursor++ % routes.length];
   }
   p.index = 0; p.t = 0; p.hold = 0;
   bus.setLatLng(point(p.run.path[0]));
@@ -80,7 +86,12 @@ function updateToggle() {
 }
 updateToggle();
 byId("toggle").onclick = () => { playback.running = !playback.running; updateToggle(); };
-mode.onchange = nextRun;
+byId("show-best").onclick = () => {
+  mode.value = "best";
+  cursor = (playback.snapshot.winners || playback.snapshot.best).length - 1;
+  nextRun();
+};
+mode.onchange = () => { cursor = 0; nextRun(); };
 let last = performance.now();
 function frame(now) {
   const delta = Math.min(now-last,50);
@@ -104,25 +115,43 @@ function frame(now) {
 }
 async function load(url) {
   const response = await fetch(url,{cache:"no-store"});
+  if (response.status === 204) return null;
   if (!response.ok) throw new Error(`${response.status} ${url}`);
   return response.json();
 }
 async function poll() {
   try {
-    const snapshot = await load(`runs/${runName}/trace.json`);
-    if (snapshot.stops.map(s=>s.id).join() !== network.stops.map(s=>s.id).join()) {
+    const snapshot = await load(runName ? `runs/${runName}/trace.json` : "trace.json");
+    if (!snapshot) return;
+    if (!network || snapshot.stops.map(s=>s.id).join() !== network.stops.map(s=>s.id).join()) {
       renderStops(snapshot);
       playback.run = null;
       playback.queue = [];
       playback.seen = 0;
     }
+    if (!snapshot.recent.length) {
+      status.textContent = "첫 라운드 학습 중";
+      return;
+    }
     const p = playback;
     if (snapshot.progress < p.seen) { p.seen=0; p.queue=[]; p.run=null; }
-    p.queue = [...p.queue,...snapshot.recent.filter(run=>run.episode>p.seen)].slice(-30);
+    p.queue = [...p.queue,...snapshot.recent.filter(run=>(run.round ?? run.episode)>p.seen)].slice(-30);
     p.seen=snapshot.progress;
     p.snapshot=snapshot;
     if (!p.run) nextRun();
-    status.textContent = `${snapshot.config.algo} · ${snapshot.progress} 에피소드 · ${snapshot.steps.toLocaleString()} 전이${snapshot.config.steps ? " / " + snapshot.config.steps.toLocaleString() : ""} · 거리 제한 ${(snapshot.budget_m/1000).toFixed(2)} km`;
+    const size = snapshot.config.rounds_per_episode || 1;
+    const total = snapshot.config.episodes * size;
+    const round = (snapshot.progress - 1) % size + 1;
+    const episode = Math.ceil(snapshot.progress / size);
+    const budget = snapshot.config.steps ? ` · 전이 ${snapshot.steps} / ${snapshot.config.steps}` : ` · 전체 ${snapshot.progress} / ${total}`;
+    status.textContent = `${snapshot.config.algo} · ${snapshot.finished ? "학습 종료 · 경로 재생 중" : "학습 중"} · 에피소드 ${episode}, 라운드 ${round} / ${size}${budget}`;
+    const winner = (snapshot.winners || snapshot.best || []).at(-1);
+    if (winner) {
+      const names = winner.path.map(i => network.stops[i].name);
+      byId("winner").textContent = `에피소드 ${winner.episode} 최고 보상 ${winner.score.toFixed(2)} · ${(winner.distance_m / 1000).toFixed(2)} km · ${names.join(" → ")}`;
+      byId("show-best").disabled = false;
+    }
+
   } catch (error) {
     status.textContent = `학습 기록 대기 중 · ${error.message}`;
   } finally {
@@ -139,24 +168,7 @@ function renderStops(data) {
     L.circleMarker(point(i),{radius:stop.hub?7:4,weight:2,color:"#fff",fillColor:stop.hub?"#c46413":"#335a75",fillOpacity:1}).bindTooltip(label).addTo(markers);
   });
 }
-load("network.json").then(data=>{
-  renderStops(data);
-  poll();
-  requestAnimationFrame(frame);
-}).catch(error=>{status.textContent=error.message;});
+poll();
+requestAnimationFrame(frame);
 </script>
-</HTML>
-cat > yonsei_bus_rl/.gitignore <<'EOF'
-__pycache__/
-.venv/
-runs/
-.DS_Store
-EOF
-cat > yonsei_bus_rl/requirements.txt <<'EOF'
-torch>=2.2
-EOF
-cd yonsei_bus_rl
-python3 train.py --algo sarsa --episodes 100 --out runs/sarsa
-python3 train.py --algo random --episodes 100 --out runs/random
-python3 train.py --algo greedy --episodes 1 --out runs/greedy
-python3 -m py_compile prepare.py train.py
+</html>
