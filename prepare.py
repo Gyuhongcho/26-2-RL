@@ -3,6 +3,8 @@ import argparse
 import csv
 import json
 import math
+from io import TextIOWrapper
+from zipfile import ZipFile
 from pathlib import Path
 
 HUBS = {
@@ -18,7 +20,7 @@ def rows(path):
         return list(csv.DictReader(file))
 
 
-def prepare(folder, output):
+def prepare(folder, output, include_mapo=False):
     candidates = rows(folder / "13_candidate_pool_v2_PROPOSAL.csv")
     ids = [r["station_id"] for r in candidates]
     if len(ids) != len(set(ids)) or not set(HUBS) <= set(ids):
@@ -46,12 +48,59 @@ def prepare(folder, output):
         splits[month] = row["split"]
     if not monthly or any(set(values) != set(ids) for values in monthly.values()):
         raise ValueError("Monthly demand coverage does not match candidates")
+    baseline_ids = list(ids)
+    if include_mapo:
+        original = set(ids)
+        stations = rows(folder / "01_region_stations_clean.csv")
+        ridership = rows(folder / "02_region_ridership_7to9_monthly.csv")
+        by_station = {}
+        for row in ridership:
+            by_station.setdefault(row["station_id"], []).append(row)
+
+        def training_demand(stop):
+            records = by_station.get(stop["station_id"], [])
+            return sum(int(r["alight_07_09"]) / int(r["calendar_days"])
+                       for r in records if r["split"] == "train")
+
+        for keyword in ("홍대입구", "연남동", "공덕역"):
+            options = [r for r in stations if r["station_id"] not in ids
+                       and r["station_id"].startswith(("113000", "113900"))
+                       and keyword in r["station_name"]
+                       and r["village_bus_stoppable"] == "1"
+                       and {row["month"] for row in by_station.get(r["station_id"], [])} == set(monthly)]
+            if len(options) < 2:
+                raise ValueError(f"Need at least two stops with complete ridership for {keyword}")
+            for stop in sorted(options, key=lambda r: (-training_demand(r), r["station_id"]))[:2]:
+                station_id = stop["station_id"]
+                ids.append(station_id)
+                candidates.append(stop)
+                for row in by_station[station_id]:
+                    monthly[row["month"]][station_id] = int(row["alight_07_09"])
+
+        selected = set(ids)
+        edges = {(i, j): distances[x][y] for x, i in enumerate(baseline_ids)
+                 for y, j in enumerate(baseline_ids)}
+        for archive in sorted(folder.glob("11_road_distance_part*.zip")):
+            with ZipFile(archive) as zipped:
+                for name in zipped.namelist():
+                    with zipped.open(name) as source:
+                        for row in csv.DictReader(TextIOWrapper(source, encoding="utf-8-sig")):
+                            i, j = row["from_station_id"], row["to_station_id"]
+                            if i in selected and j in selected and (i not in original or j not in original):
+                                distance = float(row["road_m"])
+                                if not math.isfinite(distance) or distance < 0:
+                                    raise ValueError(f"Invalid road distance {i} → {j}")
+                                edges[i, j] = distance
+        distances = [[0 if i == j else edges[i, j] for j in ids] for i in ids]
+
     stops = [{"id": r["station_id"], "name": r["station_name"],
               "lat": float(r["latitude"]), "lon": float(r["longitude"]),
               "hub": HUBS.get(r["station_id"], "")} for r in candidates]
     data = dict(stops=stops, distances_m=distances,
                 months={m: dict(split=splits[m], days=days[m],
                                 alight=[monthly[m][i] for i in ids]) for m in sorted(monthly)})
+    if include_mapo:
+        data["baseline_stop_ids"] = baseline_ids
     output.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
 
@@ -59,5 +108,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path, help="Folder containing CSV files 02, 13 and 14")
     parser.add_argument("--out", type=Path, default=Path(__file__).with_name("network.json"))
+    parser.add_argument("--include-mapo", action="store_true")
     args = parser.parse_args()
-    prepare(args.source, args.out)
+    prepare(args.source, args.out, args.include_mapo)

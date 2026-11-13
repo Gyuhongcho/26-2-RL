@@ -25,7 +25,9 @@ class Route:
                         for month, stats in data["months"].items()}
         train = [v for month, v in self.monthly.items() if data["months"][month]["split"] == "train"]
         self.demand = [sum(x) / len(train) for x in zip(*train)]
-        self.scale = max(1, max(self.demand))
+        baseline_ids = set(data.get("baseline_stop_ids", ()))
+        self.scale = max(1, max(demand for stop, demand in zip(self.stops, self.demand)
+                                if not baseline_ids or stop["id"] in baseline_ids))
         self.train_months = {m for m, v in data["months"].items() if v["split"] == "train"}
 
     def hubs(self, path):
@@ -268,8 +270,11 @@ def main():
     if args.algo == "dp" and len(data["stops"]) > 12:
         parser.error("Use --max-stops 5 to 12 for the exact DP experiment")
     route = Route(data, args.budget_m, args.bonus, args.cost)
+    baseline_ids = set(data.get("baseline_stop_ids", ()))
     eligible = [i for i, stop in enumerate(route.stops)
-                if not stop["hub"] and route.actions((i, 1 << i, 0))]
+                if not stop["hub"] and (not baseline_ids or stop["id"] in baseline_ids)
+                and any(not baseline_ids or route.stops[j]["id"] in baseline_ids
+                        for j in route.actions((i, 1 << i, 0)))]
     if len(eligible) < 5:
         parser.error("Need five non-hub stops with an available first move; increase --max-stops or --budget-m")
     starts = random.Random(args.start_seed).sample(eligible, 5)

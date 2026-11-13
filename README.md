@@ -44,3 +44,13 @@ Q-learning과 SARSA는 동일한 상태 표현으로 각각 다음 상태의 최
 
 `history.jsonl`에는 모든 경로를, `episode_winners.json`에는 에피소드별 최고 보상 경로를 저장한다. 지도에서 **최고 보상 노선 보기**를 누르면 최신 에피소드 우승 경로를 재생한다. 모델은 `model.pt` 또는 `q_table.json`에 저장된다.
 `--steps`를 지정하면 전이 예산에 맞춰 학습하고 마지막으로 진행 중이던 노선을 완성한다. 마지막 에피소드는 설정한 라운드 수보다 짧을 수 있다.
+
+## 마포구 확장 비교
+
+`network_mapo.json`은 기존 40곳과 홍대입구역·연남동·공덕역 주변 정류장 각 2곳을 포함한다. 마을버스 정차 가능으로 분류되고 집계 기간을 충족하는 후보를 학습 기간 일평균 하차량 순으로 골랐다. 추가 구간의 방향별 거리는 팀이 제공한 도로거리 ZIP에서 읽는다. 기본 거리 상한, 출발 후보 및 수요 점수의 정규화 기준은 기존 후보군을 기준으로 맞춘다.
+
+```sh
+python3 prepare.py "/path/to/data-folder" --include-mapo --out network_mapo.json
+python3 train.py --steps 3000 --start-seed 42 --seed 42 --no-viewer --out runs/baseline
+python3 train.py --data network_mapo.json --steps 3000 --start-seed 42 --seed 42 --out runs/mapo
+```
