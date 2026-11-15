@@ -7,12 +7,24 @@ from pathlib import Path
 from io import TextIOWrapper
 from zipfile import ZipFile
 
-HUBS = {
-    "112900230": "신촌",
-    "112000057": "이대", "112900187": "이대",
-    "112000410": "아현", "112900121": "아현",
-    "112000031": "연대앞", "112000032": "연대앞", "112900188": "연대앞",
+# Explicit station name aliases from the Seodaemun stop inventory.
+HUB_NAMES = {
+    "연대앞": ("연대앞", "연세대학교앞"),
+    "신촌역(2호선)": ("신촌역2호선", "신촌전철역"),
+    "신촌역(경의중앙선)": ("신촌기차역",),
+    "이대역": ("이대역", "이대전철역"),
+    "아현역": ("아현역", "아현전철역"),
+    "충정로역": ("충정로역",),
+    "서대문역": ("서대문역", "서대문전철역"),
+    "독립문역": ("독립문역",),
+    "무악재역": ("무악재역",),
+    "가좌역": ("가좌역",),
 }
+
+
+def hub_for(name):
+    return next((hub for hub, aliases in HUB_NAMES.items()
+                 if any(alias in name for alias in aliases)), "")
 
 
 def rows(path):
@@ -25,8 +37,8 @@ def prepare(folder, output):
                   if row["station_id"].startswith("112")]
     ids = [row["station_id"] for row in candidates]
     selected = set(ids)
-    if len(ids) != len(selected) or not set(HUBS) <= selected:
-        raise ValueError("Expected unique Seodaemun stop IDs including all configured hub stops")
+    if not ids or len(ids) != len(selected):
+        raise ValueError("Expected a nonempty set of unique Seodaemun stop IDs")
 
     edges = {}
     for archive in sorted(folder.glob("11_road_distance_part*.zip")):
@@ -61,7 +73,7 @@ def prepare(folder, output):
         raise ValueError("Monthly demand coverage does not match candidates")
     stops = [{"id": r["station_id"], "name": r["station_name"],
               "lat": float(r["latitude"]), "lon": float(r["longitude"]),
-              "hub": HUBS.get(r["station_id"], "")} for r in candidates]
+              "hub": hub_for(r["station_name"])} for r in candidates]
     data = dict(stops=stops, distances_m=distances,
                 months={m: dict(split=splits[m], days=days[m],
                                 alight=[monthly[m][i] for i in ids]) for m in sorted(monthly)})

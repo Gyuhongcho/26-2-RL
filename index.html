@@ -15,11 +15,15 @@ button{cursor:pointer;background:#134f68;color:white}.stats{border-top:1px solid
 .stats strong{display:block;font-size:20px}#map{height:clamp(360px,61vh,720px);background:#dce7e9}
 .bus{font-size:25px;text-align:center;filter:drop-shadow(0 2px 3px #0006)}.final-route{padding:12px 16px;background:#fff5dc;border-top:1px solid #d9bd83}
 .caption{padding:12px 16px;font-size:13px;margin:0}
+.comparison-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.comparison-card h2,.comparison-card p{margin:12px 14px}
+.comparison-card h2{font-size:19px}.result-map{height:340px;background:#dce7e9}
+@media(max-width:850px){.comparison-grid{grid-template-columns:1fr}}
 </style>
 <main>
 <h1>연세대 마을버스 노선 실험</h1>
 <p id="status" role="status">학습 기록 불러오는 중</p>
-<section class="panel">
+<section id="simulation" class="panel">
 <div class="controls">
 <button id="toggle" type="button">일시정지</button>
 <label>경로 <select id="mode"><option value="recent">최근 학습 경로</option><option value="best">에피소드 최고 보상 노선</option></select></label>
@@ -40,12 +44,26 @@ button{cursor:pointer;background:#134f68;color:white}.stats{border-top:1px solid
 <span>출발점<strong id="origin">—</strong></span>
 <span>현재 정류장<strong id="stop">—</strong></span>
 </div>
-<p class="caption">주황색은 우선 거점 · 점은 실제 후보 정류장 · 연결선은 방문 순서 · 이동비용은 도로거리 행렬 기준</p>
+<p id="route-note" class="caption">주황색은 우선 거점</p>
 </section>
+<section id="comparison" hidden><div id="comparison-grid" class="comparison-grid"></div></section>
 </main>
 <script>
 const byId = id => document.getElementById(id);
 const status = byId("status");
+const compare = new URLSearchParams(location.search).has("compare");
+const methodLabels = {
+  random: {name:"Random", color:"#117073"},
+  greedy: {name:"이용량 대비 거리 Greedy", color:"#99521b"},
+  dqn: {name:"DQN + ε-greedy", color:"#5841a0"},
+  "monte-carlo": {name:"Monte Carlo Control", color:"#244f86"},
+  "q-learning": {name:"Q-learning", color:"#117073"},
+  sarsa: {name:"SARSA", color:"#5841a0"}
+};
+let methods = [];
+let comparisonRounds = 0;
+let comparisonComplete = false;
+let stage = 0;
 const mode = byId("mode");
 const playback = {running:!matchMedia("(prefers-reduced-motion: reduce)").matches, snapshot:null, run:null, index:0, t:0, hold:0, queue:[], seen:0};
 const runName = new URLSearchParams(location.search).get("run");
@@ -66,7 +84,7 @@ function point(i) { const stop = network.stops[i]; return [stop.lat,stop.lon]; }
 function readout() {
   const p = playback;
   const traveled = p.run.path.slice(0,p.index+1);
-  const meters = traveled.slice(1).reduce((total,stop,i) => total + network.distances_m[traveled[i]][stop],0);
+  const meters = p.run.prefix_distances_m?.[p.index] ?? traveled.slice(1).reduce((total,stop,i) => total + network.distances_m[traveled[i]][stop],0);
   byId("episode").textContent = p.run.round ?? p.run.episode ?? p.snapshot.progress;
   byId("score").textContent = p.run.rewards.slice(0,p.index).reduce((a,b)=>a+b,0).toFixed(2);
   byId("distance").textContent = `${(meters/1000).toFixed(2)} km`;
@@ -86,8 +104,14 @@ function nextRun() {
     p.run = routes[cursor++ % routes.length];
   }
   p.index = 0; p.t = 0; p.hold = 0;
-  bus.setLatLng(point(p.run.path[0]));
-  routeLine.setLatLngs([point(p.run.path[0])]);
+  p.legs = p.run.road_legs?.map(coordinates => coordinates.map(([lon,lat]) => [lat,lon]));
+  const origin = p.legs?.[0]?.[0] ?? point(p.run.path[0]);
+  bus.setLatLng(origin).setOpacity(1);
+  routeLine.setStyle({dashArray:p.legs ? null : "5 7"});
+  routeLine.setLatLngs([origin]);
+  byId("route-note").textContent = p.legs
+    ? "차량 도로 경로 재생 · 주황색은 우선 거점"
+    : "점선과 버스 움직임은 정류장 방문 순서 · 거리는 도로거리 기준";
   readout();
 }
 function updateToggle() {
@@ -120,7 +144,9 @@ byId("show-final").onclick = () => {
   routeLine.remove();
   bus.remove();
   const points = winner.path.map(point);
-  finalLine.setLatLngs(points).addTo(map);
+  const line = winner.road_geometry?.coordinates.map(([lon,lat]) => [lat,lon]);
+  finalLine.setStyle({dashArray:line ? null : "5 7"});
+  finalLine.setLatLngs(line ?? points).addTo(map);
   finalMarkers.clearLayers().addTo(map);
   const items = winner.path.map((index, order) => {
     const label = document.createElement("span");
@@ -132,8 +158,8 @@ byId("show-final").onclick = () => {
     return item;
   });
   byId("final-stops").replaceChildren(...items);
-  byId("final-summary").textContent = `전체 최고 보상 ${winner.score.toFixed(2)} · ${(winner.distance_m/1000).toFixed(2)} km · 에피소드 ${winner.episode}, 라운드 ${winner.round}`;
-  map.fitBounds(points, {padding:[42,42], maxZoom:17});
+  byId("final-summary").textContent = `전체 최고 보상 ${winner.score.toFixed(2)} · ${(winner.distance_m/1000).toFixed(2)} km · 에피소드 ${winner.episode}, 라운드 ${winner.round}${line ? "" : " · 점선은 방문 순서"}`;
+  map.fitBounds(line ?? points, {padding:[42,42], maxZoom:17});
 };
 let last = performance.now();
 function frame(now) {
@@ -147,14 +173,27 @@ function frame(now) {
       if (p.hold >= 850) nextRun();
     } else {
       p.t = Math.min(1,p.t + delta*Number(byId("speed").value)/1600);
-      const a = point(path[p.index]), b = point(path[p.index+1]);
-      const location = a.map((v,i)=>v+(b[i]-v)*p.t);
-      bus.setLatLng(location);
-      routeLine.setLatLngs([...path.slice(0,p.index+1).map(point),location]);
+      const line = p.legs?.[p.index] ?? [point(path[p.index]), point(path[p.index+1])];
+      if (line) {
+        const lengths = [0];
+        for (let i = 1; i < line.length; i++)
+          lengths.push(lengths[i-1] + map.distance(line[i-1], line[i]));
+        const target = p.t * lengths.at(-1);
+        const segment = lengths.findIndex((length, i) => i > 0 && length >= target);
+        const fraction = segment > 0 ? (target - lengths[segment-1]) /
+          (lengths[segment] - lengths[segment-1] || 1) : 0;
+        const location = segment > 0
+          ? line[segment-1].map((value,i) => value + (line[segment][i]-value)*fraction)
+          : line[0];
+        bus.setLatLng(location);
+        const partial = [...line.slice(0, Math.max(segment,1)), location];
+        routeLine.setLatLngs(p.legs ? [...p.legs.slice(0,p.index), partial]
+          : [...path.slice(0,p.index).map(point), ...partial]);
+      }
       if (p.t === 1) { p.index++; p.t=0; readout(); }
     }
   }
-  requestAnimationFrame(frame);
+  if (!comparisonComplete) requestAnimationFrame(frame);
 }
 async function load(url) {
   const response = await fetch(url,{cache:"no-store"});
@@ -162,9 +201,105 @@ async function load(url) {
   if (!response.ok) throw new Error(`${response.status} ${url}`);
   return response.json();
 }
+async function showComparison() {
+  const snapshots = await Promise.all(methods.map(method => load(`${method.id}/trace.json`)));
+  const roadData = await load("road_geometry.json").catch(() => null);
+  const roadRoutes = snapshots.map((snapshot, index) => {
+    const winner = snapshot.overall_best;
+    if (winner.road_geometry) return {geometry:winner.road_geometry, distance_m:winner.distance_m, enforced:true};
+    const saved = roadData?.[methods[index].id];
+    const coordinates = snapshot.overall_best.path.map(i => [snapshot.stops[i].lon,snapshot.stops[i].lat]);
+    return saved && JSON.stringify(saved.waypoints) === JSON.stringify(coordinates) ? saved : null;
+  });
+  const grid = byId("comparison-grid");
+  grid.replaceChildren();
+  byId("simulation").hidden = true;
+  byId("comparison").hidden = false;
+  playback.running = false;
+  status.textContent = `${methods.length + 1} / ${methods.length + 1} · 방법별 최고 보상 노선 · 도로거리 상한 ${(snapshots[0].budget_m/1000).toFixed(2)} km`;
+  const bounds = snapshots.flatMap(snapshot =>
+    snapshot.overall_best.path.map(i => [snapshot.stops[i].lat,snapshot.stops[i].lon]));
+  bounds.push(...roadRoutes.flatMap(road => road ? road.geometry.coordinates.map(([lon,lat]) => [lat,lon]) : []));
+  snapshots.forEach((snapshot, index) => {
+    const method = methods[index];
+    const winner = snapshot.overall_best;
+    const card = document.createElement("article");
+    card.className = "panel comparison-card";
+    const heading = document.createElement("h2");
+    heading.textContent = method.name;
+    const metrics = document.createElement("p");
+    metrics.textContent = `보상 ${winner.score.toFixed(2)} · ${(winner.distance_m/1000).toFixed(2)} km · ${winner.path.length}개 정류장`;
+    const surface = document.createElement("div");
+    surface.className = "result-map";
+    surface.setAttribute("aria-label", `${method.name} 최고 보상 노선 지도`);
+    const route = document.createElement("p");
+    route.textContent = winner.path.map(i => snapshot.stops[i].name).join(" → ");
+    const road = roadRoutes[index];
+    const geometryNote = document.createElement("p");
+    geometryNote.textContent = road?.enforced
+      ? `OSRM 연속 도로 경로 · 거리 상한 충족`
+      : road ? `OSRM 차량 경로 ${(road.distance_m/1000).toFixed(2)} km · 정류장 연결 최대 오차 ${road.max_snap_m.toFixed(0)} m`
+      : "점선은 정류장 방문 순서 · 거리는 도로거리 기준";
+    card.append(heading, metrics, surface, geometryNote, route);
+    grid.append(card);
+    const resultMap = L.map(surface, {zoomControl:false, dragging:false,
+      scrollWheelZoom:false, doubleClickZoom:false, touchZoom:false, boxZoom:false, keyboard:false});
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom:19, attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+    }).addTo(resultMap);
+    const points = winner.path.map(i => [snapshot.stops[i].lat,snapshot.stops[i].lon]);
+    if (road) {
+      L.geoJSON(road.geometry, {style:{color:method.color,weight:5}}).addTo(resultMap);
+      if (!road.enforced) resultMap.attributionControl.addAttribution('Routing: <a href="https://routing.openstreetmap.de/about.html">FOSSGIS OSRM</a> · <a href="https://www.openstreetmap.org/fixthemap">지도 오류 수정</a>');
+    } else {
+      L.polyline(points, {color:method.color,weight:4,dashArray:"5 7"}).addTo(resultMap);
+    }
+    points.forEach((point, order) => {
+      const label = document.createElement("span");
+      label.textContent = `${order + 1}. ${snapshot.stops[winner.path[order]].name}`;
+      L.circleMarker(point, {radius:5,color:method.color,fillColor:"#fff",fillOpacity:1})
+        .bindTooltip(label).addTo(resultMap);
+    });
+    resultMap.fitBounds(bounds,{padding:[24,24],maxZoom:16});
+  });
+}
+
 async function poll() {
   try {
-    const snapshot = await load(runName ? `runs/${runName}/trace.json` : "trace.json");
+    let url = runName ? `runs/${runName}/trace.json` : "trace.json";
+    if (compare) {
+      const manifest = await load("comparison.json");
+      if (!manifest || !manifest.stage) return;
+      methods = (manifest.methods || ["q-learning", "monte-carlo", "sarsa"])
+        .map(id => ({id, ...methodLabels[id]}));
+      comparisonRounds = manifest.rounds || 100;
+      if (manifest.stage === methods.length + 1) {
+        await showComparison();
+        comparisonComplete = true;
+        return;
+      }
+      if (manifest.stage !== stage) {
+        stage = manifest.stage;
+        playback.run = null;
+        playback.queue = [];
+        playback.seen = 0;
+        playback.snapshot = null;
+        mode.value = "recent";
+        finalVisible = false;
+        byId("final-route").hidden = true;
+        finalLine.remove();
+        finalMarkers.remove();
+        routeLine.addTo(map);
+        bus.addTo(map);
+        byId("show-final").setAttribute("aria-pressed", "false");
+        for (const id of ["toggle", "mode", "speed"]) byId(id).disabled = false;
+        byId("show-best").disabled = true;
+        byId("show-final").disabled = true;
+        byId("winner").textContent = `${comparisonRounds.toLocaleString()}회 중 최고 보상 경로를 기록합니다.`;
+      }
+      url = `${methods[stage-1].id}/trace.json`;
+    }
+    const snapshot = await load(url);
     if (!snapshot) return;
     if (!network || snapshot.stops.map(s=>s.id).join() !== network.stops.map(s=>s.id).join()) {
       renderStops(snapshot);
@@ -189,6 +324,8 @@ async function poll() {
     const budget = snapshot.config.steps ? ` · 전이 ${snapshot.steps} / ${snapshot.config.steps}` : ` · 전체 ${snapshot.progress} / ${total}`;
     status.textContent = `${snapshot.config.algo} · ${snapshot.finished ? "학습 종료 · 경로 재생 중" : "학습 중"} · 에피소드 ${episode}, 라운드 ${round} / ${size}${budget}`;
     byId("show-final").disabled = !(snapshot.finished && snapshot.overall_best);
+    if (compare) status.textContent =
+      `${stage} / ${methods.length + 1} · ${methods[stage-1].name} · ${snapshot.progress.toLocaleString()} / ${comparisonRounds.toLocaleString()}회`;
     const winner = (snapshot.winners || snapshot.best || []).at(-1);
     if (winner) {
       const names = winner.path.map(i => network.stops[i].name);
@@ -199,7 +336,7 @@ async function poll() {
   } catch (error) {
     status.textContent = `학습 기록 대기 중 · ${error.message}`;
   } finally {
-    setTimeout(poll,1200);
+    if (!comparisonComplete) setTimeout(poll, compare ? 350 : 1200);
   }
 }
 function renderStops(data) {
@@ -208,7 +345,7 @@ function renderStops(data) {
   map.fitBounds(network.stops.map((_,i)=>point(i)),{padding:[32,32]});
   network.stops.forEach((stop,i)=>{
     const label=document.createElement("span");
-    label.textContent=stop.name+(stop.hub ? ` · ${stop.hub}` : "");
+    label.textContent=stop.name+(stop.hub ? ` · ${stop.hub_name || stop.hub}` : "");
     L.circleMarker(point(i),{radius:stop.hub?7:4,weight:2,color:"#fff",fillColor:stop.hub?"#c46413":"#335a75",fillOpacity:1}).bindTooltip(label).addTo(markers);
   });
 }

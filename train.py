@@ -3,6 +3,7 @@ import argparse
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from collections import deque
+from route_geometry import LocalRouter
 from functools import lru_cache
 import json
 import math
@@ -12,58 +13,115 @@ from threading import Thread
 import time
 import webbrowser
 
+COMPARISON_METHODS = ("random", "greedy", "dqn", "monte-carlo")
+LEGACY_METHODS = ("q-learning", "monte-carlo", "sarsa")
+COMPARISON_ROUNDS = 1000
+
 ROOT = Path(__file__).resolve().parent
 
 
 class Route:
-    def __init__(self, data, budget, bonus, cost):
+    def __init__(self, data, budget, bonus, cost, osrm=None):
         self.stops = data["stops"]
+        self.router = LocalRouter(osrm, self.stops) if osrm else None
         self.distance = data["distances_m"]
         self.budget = budget
         self.bonus, self.cost = bonus, cost
-        self.monthly = {month: [n / stats["days"] for n in stats["alight"]]
+        self.monthly = {month: [n / stats["days"] if n is not None else None for n in stats["alight"]]
                         for month, stats in data["months"].items()}
         train = [v for month, v in self.monthly.items() if data["months"][month]["split"] == "train"]
         self.demand = [sum(x) / len(train) for x in zip(*train)]
         self.scale = max(1, max(self.demand))
+        if data.get("source"):
+            self.demand = [stop["demand_daily_train"] for stop in self.stops]
+            self.demand_scores = [stop["demand_score_train"] for stop in self.stops]
+        else:
+            self.demand_scores = [value / self.scale for value in self.demand]
         self.train_months = {m for m, v in data["months"].items() if v["split"] == "train"}
 
     def hubs(self, path):
         return {self.stops[i]["hub"] for i in path} - {""}
 
+    def initial(self, start):
+        state = (start, 1 << start, 0)
+        return (*state, (start,)) if self.router else state
+
     def actions(self, state):
-        current, visited, meters = state
+        current, visited, meters = state[:3]
+        if self.router:
+            return [i for i in range(len(self.stops))
+                    if not (visited >> i) & 1 and self.road_distance(state, i) <= self.budget]
         return [i for i, distance in enumerate(self.distance[current])
-                if not (visited >> i) & 1
+                if distance is not None and not (visited >> i) & 1
                 and meters + distance <= self.budget + 1e-7]
 
+    def road_distance(self, state, action):
+        if self.router:
+            road = self.router.route((*state[3], action), False)
+            return road["distance"] if road else math.inf
+        return state[2] + self.distance[state[0]][action]
+
     def step(self, state, action):
-        current, visited, meters = state
-        distance = self.distance[current][action]
+        current, visited, meters = state[:3]
+        total = self.road_distance(state, action)
+        distance = total - meters
         gain = self.gain(visited, action)
         reward = gain - self.cost * distance / 1000
-        return (action, visited | (1 << action), round(meters + distance, 3)), reward
+        following = (action, visited | (1 << action), total if self.router else round(total, 3))
+        if self.router:
+            following = (*following, (*state[3], action))
+        return following, reward
 
     def gain(self, visited, action):
         hub = self.stops[action]["hub"]
         prior_hubs = self.hubs(i for i in range(len(self.stops)) if (visited >> i) & 1)
         new_hub = hub and hub not in prior_hubs
-        demand = self.demand[action] / self.scale
+        demand = self.demand_scores[action]
         return demand + self.bonus * bool(new_hub)
 
     def features(self, state):
-        current, visited, meters = state
+        current, visited, meters = state[:3]
         n = len(self.stops)
+        positions = {}
+        if self.router:
+            positions = {stop: (order + 1) / n for order, stop in enumerate(state[3])}
         return ([float(i == current) for i in range(n)]
-                + [float((visited >> i) & 1) for i in range(n)]
+                + [positions.get(i, 0) if self.router else float((visited >> i) & 1) for i in range(n)]
                 + [1 - meters / self.budget])
 
     def summary(self, path, rewards):
-        return dict(path=path, rewards=rewards, score=sum(rewards),
-                    distance_m=sum(self.distance[a][b] for a, b in zip(path, path[1:])),
+        result = dict(path=path, rewards=rewards, score=sum(rewards),
+                    distance_m=0 if self.router else sum(self.distance[a][b] for a, b in zip(path, path[1:])),
                     hubs=sorted(self.hubs(path)), complete=True,
-                    validation={m: sum(values[i] for i in path[1:])
+                    validation={m: (sum(values[i] for i in path[1:])
+                                    if all(values[i] is not None for i in path[1:]) else None)
                                 for m, values in self.monthly.items() if m not in self.train_months})
+        if self.router:
+            result["prefix_distances_m"] = [0] + [
+                self.router.route(tuple(path[:length]), False)["distance"]
+                for length in range(2, len(path) + 1)]
+        if self.router and len(path) > 1:
+            road = self.router.route(tuple(path), True)
+            if road is None or not 0 <= road["distance"] <= self.budget:
+                raise RuntimeError("Final OSRM geometry does not satisfy the distance budget")
+            checked = self.router.route(tuple(path), False)
+            if road["distance"] != checked["distance"]:
+                raise RuntimeError("OSRM distance changed between action validation and geometry retrieval")
+            legs = []
+            for leg in road["legs"]:
+                coordinates = []
+                for step in leg["steps"]:
+                    for point in step["geometry"]["coordinates"]:
+                        if not coordinates or point != coordinates[-1]:
+                            coordinates.append(point)
+                if not coordinates:
+                    raise RuntimeError("Missing road coordinates for animation")
+                legs.append(coordinates)
+            if len(legs) != len(path) - 1:
+                raise RuntimeError("OSRM leg count does not match stop sequence")
+            result.update(distance_m=road["distance"], road_geometry=road["geometry"],
+                          road_legs=legs)
+        return result
 
 
 class TableAgent:
@@ -73,7 +131,7 @@ class TableAgent:
 
     def value(self, state, action):
         # Round only the Q-table key to avoid float addition artifacts.
-        return self.q.get((state[0], state[1], round(state[2], 3), action), 0.0)
+        return self.q.get((state[0], state[1], round(state[2], 3), *state[3:], action), 0.0)
 
     def best(self, state, actions):
         return max(actions, key=lambda action: self.value(state, action))
@@ -84,10 +142,26 @@ class TableAgent:
             selected = next_action if self.method == "sarsa" else self.best(following, actions)
             future = self.value(following, selected)
         old = self.value(state, action)
-        self.q[state[0], state[1], round(state[2], 3), action] = old + self.alpha * (reward + self.gamma * future - old)
+        self.q[(state[0], state[1], round(state[2], 3), *state[3:], action)] = old + self.alpha * (reward + self.gamma * future - old)
 
     def save(self, path):
         publish(path, [[*key, value] for key, value in self.q.items()])
+
+
+class MonteCarloAgent(TableAgent):
+    def __init__(self, gamma):
+        super().__init__("monte-carlo", 0, gamma)
+        self.counts = {}
+
+    def update_route(self, transitions):
+        total = 0
+        for state, action, reward in reversed(transitions):
+            total = reward + self.gamma * total
+            key = (*state[:2], round(state[2], 3), *state[3:], action)
+            count = self.counts.get(key, 0) + 1
+            self.counts[key] = count
+            old = self.q.get(key, 0)
+            self.q[key] = old + (total - old) / count
 
 
 class DQN:
@@ -160,8 +234,8 @@ def exact_policy(route, gamma):
     return lambda state, actions: solve(state)[1]
 
 
-def episode(route, start, choose, learn=None):
-    state = (start, 1 << start, 0)
+def episode(route, start, choose, learn=None, trajectory=None):
+    state = route.initial(start)
     path, rewards = [start], []
     actions = route.actions(state)
     action = choose(state, actions) if actions else None
@@ -171,6 +245,8 @@ def episode(route, start, choose, learn=None):
         next_action = choose(following, actions) if actions else None
         if learn is not None:
             learn(state, action, reward, following, actions, next_action)
+        if trajectory is not None:
+            trajectory.append((state, action, reward))
         path.append(action)
         rewards.append(reward)
         state, action = following, next_action
@@ -184,7 +260,7 @@ def publish(path, data):
 
 
 @contextmanager
-def viewer(enabled, output):
+def viewer(enabled, output, comparison=False):
     if not enabled:
         yield
         return
@@ -193,6 +269,11 @@ def viewer(enabled, output):
         def do_GET(self):
             files = {"/": (ROOT / "index.html", "text/html"),
                      "/trace.json": (output / "trace.json", "application/json")}
+            if comparison:
+                files["/road_geometry.json"] = (output / "road_geometry.json", "application/json")
+                files["/comparison.json"] = (output / "comparison.json", "application/json")
+                for method in set(COMPARISON_METHODS + LEGACY_METHODS):
+                    files[f"/{method}/trace.json"] = (output / method / "trace.json", "application/json")
             item = files.get(self.path.partition("?")[0])
             if item is None:
                 self.send_error(404)
@@ -218,6 +299,8 @@ def viewer(enabled, output):
         worker = Thread(target=server.serve_forever, daemon=True)
         worker.start()
         url = f"http://127.0.0.1:{server.server_port}/"
+        if comparison:
+            url += "?compare=1"
         print(f"지도 시뮬레이터: {url}", flush=True)
         try:
             webbrowser.open(url)
@@ -232,7 +315,7 @@ def viewer(enabled, output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--algo", choices=["q-learning", "sarsa", "dqn", "random", "greedy", "dp"], default="q-learning")
+    parser.add_argument("--algo", choices=["q-learning", "sarsa", *COMPARISON_METHODS, "comparison", "dp"], default="comparison")
     parser.add_argument("--exploration", choices=["epsilon-greedy", "greedy"], default="epsilon-greedy")
     parser.add_argument("--episodes", type=int, default=5)
     parser.add_argument("--rounds-per-episode", type=int, default=20)
@@ -240,31 +323,38 @@ def main():
     parser.add_argument("--max-stops", type=int, help="Limit candidates for small exact comparisons")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="auto", help="DQN only: auto, cpu, cuda or mps")
-    parser.add_argument("--data", type=Path, default=ROOT / "network.json")
+    parser.add_argument("--data", type=Path, default=None, help="Network JSON (defaults to team data)")
     parser.add_argument("--out", type=Path, default=ROOT / "runs" / "local")
     parser.add_argument("--start-seed", type=int, default=42)
-    parser.add_argument("--budget-m", type=float, default=6000)
+    parser.add_argument("--budget-m", type=float, default=10000)
     parser.add_argument("--bonus", type=float, default=2)
     parser.add_argument("--cost", type=float, default=0.2, help="Reward deduction per km")
     parser.add_argument("--alpha", type=float, default=0.1)
     parser.add_argument("--gamma", type=float, default=1)
     parser.add_argument("--no-viewer", action="store_true", help="Train without opening the local map")
     parser.add_argument("--replay", type=Path, help="Open a finished run from its output folder")
+    parser.add_argument("--osrm", help="Local OSRM URL for continuous road-distance constraints")
     args = parser.parse_args()
     if args.replay:
         if args.no_viewer:
             parser.error("--replay opens the viewer")
         trace_path = args.replay / "trace.json"
-        if not trace_path.is_file():
+        comparison = (args.replay / "comparison.json").is_file()
+        if not comparison and not trace_path.is_file():
             parser.error(f"Trace file missing: {trace_path}")
-        with viewer(True, args.replay.resolve()):
+        with viewer(True, args.replay.resolve(), comparison):
             pass
         return
     if (min(args.episodes, args.rounds_per_episode) < 1 or not math.isfinite(args.budget_m) or args.budget_m <= 0
             or not all(math.isfinite(x) and x >= 0 for x in (args.bonus, args.cost))
             or not 0 < args.alpha <= 1 or not 0 <= args.gamma <= 1):
         parser.error("Invalid episodes, distance budget, reward weights, alpha or gamma")
+    if args.data is None:
+        args.data = ROOT / "network_role4.json"
+        args.osrm = args.osrm or "http://127.0.0.1:5000"
     data = json.loads(args.data.read_text(encoding="utf-8"))
+    if data.get("requires_osrm") and not args.osrm:
+        parser.error("Team network requires --osrm http://127.0.0.1:5000")
     if args.steps is not None and (args.steps < 1 or args.algo not in {"q-learning", "sarsa", "dqn"}):
         parser.error("--steps requires a positive budget and a learning algorithm")
     if args.max_stops is not None:
@@ -272,23 +362,56 @@ def main():
             parser.error("--max-stops must be at least 5")
         indices = list(range(min(args.max_stops, len(data["stops"]))))
         data["stops"] = [data["stops"][i] for i in indices]
-        data["distances_m"] = [[data["distances_m"][i][j] for j in indices] for i in indices]
+        if data["distances_m"] is not None:
+            data["distances_m"] = [[data["distances_m"][i][j] for j in indices] for i in indices]
         for month in data["months"].values():
             month["alight"] = [month["alight"][i] for i in indices]
     if args.algo == "dp" and len(data["stops"]) > 12:
         parser.error("Use --max-stops 5 to 12 for the exact DP experiment")
-    route = Route(data, args.budget_m, args.bonus, args.cost)
-    eligible = [i for i, stop in enumerate(route.stops)
-                if not stop["hub"] and route.actions((i, 1 << i, 0))]
+    route = Route(data, args.budget_m, args.bonus, args.cost, args.osrm)
+    eligible = [i for i, stop in enumerate(route.stops) if not stop["hub"]]
+    if not route.router:
+        eligible = [i for i in eligible if route.actions(route.initial(i))]
     if len(eligible) < 5:
         parser.error("Need five non-hub stops with an available first move; increase --max-stops or --budget-m")
     starts = random.Random(args.start_seed).sample(eligible, 5)
+    if route.router:
+        try:
+            if not all(route.actions(route.initial(i)) for i in starts):
+                parser.error("A sampled start has no feasible road move. Try another --start-seed.")
+        except (OSError, ValueError, RuntimeError) as error:
+            parser.error(f"Cannot validate starts using local OSRM at {args.osrm}: {error}")
+    args.out.mkdir(parents=True, exist_ok=True)
+    if args.algo == "comparison":
+        output = args.out
+        args.episodes = 1
+        try:
+            import torch
+        except ImportError:
+            parser.error("DQN requires PyTorch. Run python -m pip install -r requirements.txt")
+        args.rounds_per_episode = COMPARISON_ROUNDS
+        args.exploration = "epsilon-greedy"
+        manifest = {"methods": COMPARISON_METHODS, "rounds": COMPARISON_ROUNDS}
+        publish(output / "comparison.json", dict(manifest, stage=0))
+        with viewer(not args.no_viewer, output.resolve(), comparison=True):
+            for stage, method in enumerate(COMPARISON_METHODS, 1):
+                args.algo, args.out = method, output / method
+                train(args, route, starts, embedded=True,
+                      on_start=lambda: publish(output / "comparison.json", dict(manifest, stage=stage)))
+            publish(output / "comparison.json", dict(manifest, stage=len(COMPARISON_METHODS) + 1))
+    else:
+        train(args, route, starts)
+
+
+def train(args, route, starts, embedded=False, on_start=None):
     args.out.mkdir(parents=True, exist_ok=True)
     rng = random.Random(args.seed)
     start_rng = random.Random(args.start_seed)
     agent = None
     if args.algo == "dqn":
         agent = DQN(route, args, rng)
+    elif args.algo == "monte-carlo":
+        agent = MonteCarloAgent(args.gamma)
     elif args.algo in {"q-learning", "sarsa"}:
         agent = TableAgent(args.algo, args.alpha, args.gamma)
 
@@ -303,7 +426,7 @@ def main():
 
     def greedy(state, actions):
         return min(actions, key=lambda i: (
-            -route.gain(state[1], i) / max(1, route.distance[state[0]][i]), route.stops[i]["id"]))
+            -route.gain(state[1], i) / max(1, route.road_distance(state, i) - state[2]), route.stops[i]["id"]))
 
     def choose(state, actions):
         if dp:
@@ -325,15 +448,22 @@ def main():
     stride = max(1, total_rounds // 200)
     publish(args.out / "trace.json", dict(trace, recent=[], progress=0, steps=0, finished=False))
     publish(args.out / "episode_winners.json", winners)
-    with viewer(not args.no_viewer, args.out.resolve()):
+    if on_start:
+        on_start()
+    with viewer(not args.no_viewer and not embedded, args.out.resolve()):
         with (args.out / "history.jsonl").open("w", encoding="utf-8") as log:
             i = 0
             while steps < args.steps if args.steps else i < total_rounds:
                 i += 1
                 episode_number = (i - 1) // args.rounds_per_episode + 1
                 start = start_rng.choice(starts)
+                trajectory = [] if isinstance(agent, MonteCarloAgent) else None
                 run = dict(round=i, episode=episode_number, start_id=route.stops[start]["id"],
-                           **episode(route, start, choose, learn if agent else None))
+                           **episode(route, start, choose,
+                                     learn if agent and trajectory is None else None, trajectory))
+                if trajectory is not None:
+                    agent.update_route(trajectory)
+                    steps += len(trajectory)
                 run["steps"] = steps
                 log.write(json.dumps(run, ensure_ascii=False) + "\n")
                 if episode_best is None or run["score"] > episode_best["score"]:
