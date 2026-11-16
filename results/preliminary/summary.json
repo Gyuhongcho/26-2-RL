@@ -1,0 +1,531 @@
+{
+  "source_run": "runs/diagnostic",
+  "input_sha256": "e34fc43117007ee61ebe9952e0680020313d50f562934586adb48e46c8298daf",
+  "candidate_count": 259,
+  "distance_mode": "directional distance matrix",
+  "starts": [
+    {
+      "id": "112900172",
+      "name": "육교앞",
+      "lat": 37.5679383551,
+      "lon": 126.9643010771,
+      "hub": "",
+      "hub_name": null,
+      "demand_daily_train": 0.7886178861788617,
+      "demand_score_train": 0.0009302057960451869
+    },
+    {
+      "id": "112000102",
+      "name": "북가좌삼호.DMC아이파크아파트",
+      "lat": 37.5752684365,
+      "lon": 126.9133099754,
+      "hub": "",
+      "hub_name": null,
+      "demand_daily_train": 35.13821138211382,
+      "demand_score_train": 0.04144690155162163
+    },
+    {
+      "id": "112000037",
+      "name": "이대부고",
+      "lat": 37.5655323127,
+      "lon": 126.9464306606,
+      "hub": "",
+      "hub_name": null,
+      "demand_daily_train": 176.9512195121951,
+      "demand_score_train": 0.2087209190816855
+    },
+    {
+      "id": "112900251",
+      "name": "두란노어린이집",
+      "lat": 37.5817423785,
+      "lon": 126.9205272051,
+      "hub": "",
+      "hub_name": null,
+      "demand_daily_train": 0.3170731707317073,
+      "demand_score_train": 0.0003740002685130133
+    },
+    {
+      "id": "112000159",
+      "name": "북가좌초교·DMC현대아파트",
+      "lat": 37.5767876006,
+      "lon": 126.9084364654,
+      "hub": "",
+      "hub_name": null,
+      "demand_daily_train": 24.03252032520325,
+      "demand_score_train": 0.028347302403191468
+    }
+  ],
+  "results": {
+    "random": {
+      "config": {
+        "algo": "random",
+        "exploration": "epsilon-greedy",
+        "episodes": 1,
+        "rounds_per_episode": 1000,
+        "steps": null,
+        "max_stops": null,
+        "seed": 42,
+        "device": "auto",
+        "data": "network_role4_diagnostic.json",
+        "out": "runs/diagnostic/random",
+        "start_seed": 42,
+        "budget_m": 10000,
+        "bonus": 2,
+        "cost": 0.2,
+        "alpha": 0.1,
+        "gamma": 1,
+        "no_viewer": false,
+        "replay": null,
+        "osrm": null
+      },
+      "training_transitions": 0,
+      "unique_routes": 1000,
+      "mean_generated_reward": 0.36798751073668456,
+      "best": {
+        "round": 413,
+        "episode": 1,
+        "start_id": "112900172",
+        "path": [
+          213,
+          207,
+          220,
+          167,
+          22,
+          127,
+          219,
+          115
+        ],
+        "rewards": [
+          1.8996228730892424,
+          -0.23995510999443795,
+          -0.13858608527206126,
+          1.7204477922476458,
+          1.388407130938453,
+          2.3152500324133567,
+          0.007895610963002894
+        ],
+        "score": 6.953082244385201,
+        "distance_m": 9793.7,
+        "hubs": [
+          "ahyeon",
+          "chungjeongno",
+          "seodaemun",
+          "sinchon_line2"
+        ],
+        "complete": true,
+        "validation": {
+          "202609": 769.9333333333333,
+          "202610": 772.8709677419355
+        },
+        "steps": 0,
+        "rounds": 1000,
+        "demand_score": 0.9118222443852012,
+        "hub_bonus": 8,
+        "new_hub_count": 4,
+        "distance_cost": 1.9587400000000001,
+        "stops": [
+          {
+            "id": "112900172",
+            "name": "육교앞"
+          },
+          {
+            "id": "112900165",
+            "name": "인창중고"
+          },
+          {
+            "id": "112900179",
+            "name": "경남아파트.북아현119안전센터"
+          },
+          {
+            "id": "112900092",
+            "name": "미동초교"
+          },
+          {
+            "id": "112000063",
+            "name": "연세로.스타광장"
+          },
+          {
+            "id": "112000437",
+            "name": "아현가구단지"
+          },
+          {
+            "id": "112900178",
+            "name": "북아현로입구"
+          },
+          {
+            "id": "112000410",
+            "name": "아현역1번출구"
+          }
+        ]
+      }
+    },
+    "greedy": {
+      "config": {
+        "algo": "greedy",
+        "exploration": "epsilon-greedy",
+        "episodes": 1,
+        "rounds_per_episode": 1000,
+        "steps": null,
+        "max_stops": null,
+        "seed": 42,
+        "device": "auto",
+        "data": "network_role4_diagnostic.json",
+        "out": "runs/diagnostic/greedy",
+        "start_seed": 42,
+        "budget_m": 10000,
+        "bonus": 2,
+        "cost": 0.2,
+        "alpha": 0.1,
+        "gamma": 1,
+        "no_viewer": false,
+        "replay": null,
+        "osrm": null
+      },
+      "training_transitions": 0,
+      "unique_routes": 5,
+      "mean_generated_reward": 16.385469535350506,
+      "best": {
+        "round": 1,
+        "episode": 1,
+        "start_id": "112900172",
+        "path": [
+          213,
+          15,
+          205,
+          162,
+          219,
+          228,
+          64,
+          19,
+          21,
+          20,
+          151,
+          106,
+          36,
+          96
+        ],
+        "rewards": [
+          0.36420974932392264,
+          1.96915636088149,
+          2.027453613993364,
+          2.2510900324133565,
+          1.8627389992136403,
+          1.9751190805347245,
+          1.9284250614703007,
+          2.0474164736569556,
+          1.8544288666832889,
+          1.644223090968373,
+          1.52485979554652,
+          0.01509974030955729,
+          -0.02355542338748339
+        ],
+        "score": 19.44066544160801,
+        "distance_m": 9979.3,
+        "hubs": [
+          "ahyeon",
+          "chungjeongno",
+          "ewha",
+          "gajwa",
+          "hongik",
+          "jeungsan",
+          "seodaemun",
+          "sinchon_gyeongui",
+          "sinchon_line2",
+          "yonsei_front"
+        ],
+        "complete": true,
+        "validation": {
+          "202609": 1232.5666666666666,
+          "202610": 1203.8387096774195
+        },
+        "steps": 0,
+        "rounds": 1000,
+        "demand_score": 1.4365254416080095,
+        "hub_bonus": 20,
+        "new_hub_count": 10,
+        "distance_cost": 1.99586,
+        "stops": [
+          {
+            "id": "112900172",
+            "name": "육교앞"
+          },
+          {
+            "id": "112000051",
+            "name": "금화초등학교.서울시교육청"
+          },
+          {
+            "id": "112900163",
+            "name": "서대문사거리"
+          },
+          {
+            "id": "112900075",
+            "name": "충정로역8번출구"
+          },
+          {
+            "id": "112900178",
+            "name": "북아현로입구"
+          },
+          {
+            "id": "112900187",
+            "name": "이대전철역"
+          },
+          {
+            "id": "112000128",
+            "name": "신촌기차역"
+          },
+          {
+            "id": "112000059",
+            "name": "신촌역2호선"
+          },
+          {
+            "id": "112000062",
+            "name": "연세로.명물거리"
+          },
+          {
+            "id": "112000061",
+            "name": "동교동삼거리연희동방면"
+          },
+          {
+            "id": "112900050",
+            "name": "사천교"
+          },
+          {
+            "id": "112000202",
+            "name": "서부운수기점"
+          },
+          {
+            "id": "112000092",
+            "name": "북가좌오거리"
+          },
+          {
+            "id": "112000180",
+            "name": "북가좌초교사거리"
+          }
+        ]
+      }
+    },
+    "dqn": {
+      "config": {
+        "algo": "dqn",
+        "exploration": "epsilon-greedy",
+        "episodes": 1,
+        "rounds_per_episode": 1000,
+        "steps": null,
+        "max_stops": null,
+        "seed": 42,
+        "device": "auto",
+        "data": "network_role4_diagnostic.json",
+        "out": "runs/diagnostic/dqn",
+        "start_seed": 42,
+        "budget_m": 10000,
+        "bonus": 2,
+        "cost": 0.2,
+        "alpha": 0.1,
+        "gamma": 1,
+        "no_viewer": false,
+        "replay": null,
+        "osrm": null
+      },
+      "training_transitions": 6394,
+      "unique_routes": 903,
+      "mean_generated_reward": 5.780256716411899,
+      "best": {
+        "round": 880,
+        "episode": 1,
+        "start_id": "112000102",
+        "path": [
+          42,
+          39,
+          20,
+          6,
+          227,
+          226,
+          164,
+          216,
+          161,
+          206,
+          84
+        ],
+        "rewards": [
+          2.0484047377203245,
+          1.5665088666832887,
+          2.2032872218492874,
+          1.9221662578875698,
+          1.9371002938299544,
+          1.8205262248988283,
+          1.751850788852874,
+          1.9562438036786283,
+          -9.387790329695375e-05,
+          -0.02212480331421769
+        ],
+        "score": 15.18386951418324,
+        "distance_m": 9983.0,
+        "hubs": [
+          "ahyeon",
+          "chungjeongno",
+          "ewha",
+          "gajwa",
+          "hongik",
+          "seodaemun",
+          "sinchon_gyeongui",
+          "yonsei_front"
+        ],
+        "complete": true,
+        "validation": {
+          "202609": 1034.2666666666669,
+          "202610": 999.1935483870968
+        },
+        "steps": 5399,
+        "rounds": 1000,
+        "demand_score": 1.180469514183241,
+        "hub_bonus": 16,
+        "new_hub_count": 8,
+        "distance_cost": 1.9966000000000002,
+        "stops": [
+          {
+            "id": "112000102",
+            "name": "북가좌삼호.DMC아이파크아파트"
+          },
+          {
+            "id": "112000099",
+            "name": "모래내삼거리"
+          },
+          {
+            "id": "112000061",
+            "name": "동교동삼거리연희동방면"
+          },
+          {
+            "id": "112000031",
+            "name": "연세대학교앞"
+          },
+          {
+            "id": "112900186",
+            "name": "신촌기차역"
+          },
+          {
+            "id": "112900185",
+            "name": "이대입구"
+          },
+          {
+            "id": "112900078",
+            "name": "한성고교"
+          },
+          {
+            "id": "112900175",
+            "name": "서대문센트레빌"
+          },
+          {
+            "id": "112900069",
+            "name": "충정로역7번출구"
+          },
+          {
+            "id": "112900164",
+            "name": "종근당"
+          },
+          {
+            "id": "112000155",
+            "name": "충정로역9번출구"
+          }
+        ]
+      }
+    },
+    "monte-carlo": {
+      "config": {
+        "algo": "monte-carlo",
+        "exploration": "epsilon-greedy",
+        "episodes": 1,
+        "rounds_per_episode": 1000,
+        "steps": null,
+        "max_stops": null,
+        "seed": 42,
+        "device": "auto",
+        "data": "network_role4_diagnostic.json",
+        "out": "runs/diagnostic/monte-carlo",
+        "start_seed": 42,
+        "budget_m": 10000,
+        "bonus": 2,
+        "cost": 0.2,
+        "alpha": 0.1,
+        "gamma": 1,
+        "no_viewer": false,
+        "replay": null,
+        "osrm": null
+      },
+      "training_transitions": 5154,
+      "unique_routes": 639,
+      "mean_generated_reward": 3.3153973856429926,
+      "best": {
+        "round": 490,
+        "episode": 1,
+        "start_id": "112000102",
+        "path": [
+          42,
+          6,
+          115,
+          167,
+          193,
+          18,
+          64
+        ],
+        "rewards": [
+          1.7454072218492875,
+          1.6141156109630026,
+          1.7842339147279387,
+          -0.01182211588254474,
+          1.5498928932277178,
+          2.0235990805347246
+        ],
+        "score": 8.705426605420126,
+        "distance_m": 9974.899999999998,
+        "hubs": [
+          "ahyeon",
+          "ewha",
+          "seodaemun",
+          "sinchon_gyeongui",
+          "yonsei_front"
+        ],
+        "complete": true,
+        "validation": {
+          "202609": 630.5,
+          "202610": 613.8064516129032
+        },
+        "steps": 2448,
+        "rounds": 1000,
+        "demand_score": 0.700406605420127,
+        "hub_bonus": 10,
+        "new_hub_count": 5,
+        "distance_cost": 1.9949799999999995,
+        "stops": [
+          {
+            "id": "112000102",
+            "name": "북가좌삼호.DMC아이파크아파트"
+          },
+          {
+            "id": "112000031",
+            "name": "연세대학교앞"
+          },
+          {
+            "id": "112000410",
+            "name": "아현역1번출구"
+          },
+          {
+            "id": "112900092",
+            "name": "미동초교"
+          },
+          {
+            "id": "112900142",
+            "name": "광산사우나"
+          },
+          {
+            "id": "112000058",
+            "name": "신촌기차역입구"
+          },
+          {
+            "id": "112000128",
+            "name": "신촌기차역"
+          }
+        ]
+      }
+    }
+  }
+}
